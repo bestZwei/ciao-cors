@@ -222,6 +222,96 @@ class ConcurrencyLimiter {
 }
 
 /**
+ * 校验目标URL自身的安全性：协议白名单、控制字符、内网地址、受限端口等
+ * 初始请求和每一跳重定向都会调用，防止通过重定向绕过SSRF防护
+ */
+function validateTargetUrl(rawUrl: string): { valid: boolean; reason?: string; targetUrl?: URL } {
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(fixUrl(rawUrl));
+  } catch {
+    return { valid: false, reason: 'Invalid URL' };
+  }
+
+  // 只允许http/https协议（同时拦截javascript:/data:/file:等危险协议）
+  if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+    return { valid: false, reason: 'Unsupported URL protocol' };
+  }
+
+  // 检查是否包含控制字符
+  if (/[\u0000-\u001F\u007F-\u009F]/.test(rawUrl)) {
+    return { valid: false, reason: 'URL contains control characters' };
+  }
+
+  // 去掉IPv6地址的方括号，便于匹配私网规则
+  const hostname = targetUrl.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+
+  // 检查私有IP地址范围（IPv4）
+  const privateIPv4Patterns = [
+    /^127\./,           // 127.0.0.0/8 (localhost)
+    /^10\./,            // 10.0.0.0/8
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,  // 172.16.0.0/12
+    /^192\.168\./,      // 192.168.0.0/16
+    /^169\.254\./,      // 169.254.0.0/16 (link-local)
+    /^0\./,             // 0.0.0.0/8
+    /^224\./,           // 224.0.0.0/4 (multicast)
+    /^240\./,           // 240.0.0.0/4 (reserved)
+    /^255\.255\.255\.255$/, // broadcast
+    /^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\./  // 100.64.0.0/10 (carrier-grade NAT)
+  ];
+
+  // 检查IPv6私有地址
+  const privateIPv6Patterns = [
+    /^::1$/,            // IPv6 localhost
+    /^::/,              // IPv6 unspecified
+    /^fe80:/,           // IPv6 link-local
+    /^fc00:/,           // IPv6 unique local
+    /^fd00:/,           // IPv6 unique local
+    /^ff00:/            // IPv6 multicast
+  ];
+
+  // 检查特殊域名和元数据服务
+  const restrictedDomains = [
+    'localhost',
+    'metadata.google.internal',
+    'metadata.goog',
+    '169.254.169.254',  // AWS/GCP metadata service
+    'metadata',
+    'instance-data',
+    'consul',
+    'vault.service.consul'
+  ];
+
+  // 检查是否为IP地址
+  const isIPv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+  const isIPv6 = hostname.includes(':') && !hostname.includes('.');
+
+  if (isIPv4 && privateIPv4Patterns.some(pattern => pattern.test(hostname))) {
+    return { valid: false, reason: 'Access to private IPv4 addresses is not allowed' };
+  }
+
+  if (isIPv6 && privateIPv6Patterns.some(pattern => pattern.test(hostname))) {
+    return { valid: false, reason: 'Access to private IPv6 addresses is not allowed' };
+  }
+
+  if (restrictedDomains.some(domain => hostname === domain || hostname.endsWith('.' + domain))) {
+    return { valid: false, reason: 'Access to restricted domains is not allowed' };
+  }
+
+  // 检查端口是否为敏感端口
+  const port = targetUrl.port;
+  if (port) {
+    const portNum = parseInt(port);
+    const restrictedPorts = [22, 23, 25, 53, 135, 139, 445, 993, 995, 1433, 1521, 3306, 3389, 5432, 5984, 6379, 9200, 11211, 27017];
+    if (restrictedPorts.includes(portNum)) {
+      return { valid: false, reason: 'Access to restricted ports is not allowed' };
+    }
+  }
+
+  return { valid: true, targetUrl };
+}
+
+/**
  * 安全检查：验证目标URL和请求来源
  */
 function validateRequest(url: string, ip: string, config: Config, origin?: string | null): { valid: boolean; reason?: string } {
@@ -235,18 +325,17 @@ function validateRequest(url: string, ip: string, config: Config, origin?: strin
     return { valid: false, reason: 'URL too long' };
   }
 
-  // 解析目标域名
-  let targetDomain: string;
-  try {
-    const targetUrl = new URL(fixUrl(url));
-    targetDomain = targetUrl.hostname.toLowerCase();
-  } catch {
-    return { valid: false, reason: 'Invalid URL' };
+  // 校验目标URL安全性（协议、控制字符、内网地址、受限端口）
+  const check = validateTargetUrl(url);
+  if (!check.valid || !check.targetUrl) {
+    return { valid: false, reason: check.reason };
   }
+
+  const targetDomain = check.targetUrl.hostname.toLowerCase();
 
   // 检查域名黑名单
   if (config.blockedDomains.length > 0) {
-    const isBlocked = config.blockedDomains.some(blocked => 
+    const isBlocked = config.blockedDomains.some(blocked =>
       targetDomain === blocked || targetDomain.endsWith('.' + blocked)
     );
     if (isBlocked) {
@@ -256,7 +345,7 @@ function validateRequest(url: string, ip: string, config: Config, origin?: strin
 
   // 检查域名白名单
   if (config.allowedDomains.length > 0) {
-    const isAllowed = config.allowedDomains.some(allowed => 
+    const isAllowed = config.allowedDomains.some(allowed =>
       targetDomain === allowed || targetDomain.endsWith('.' + allowed)
     );
     if (!isAllowed) {
@@ -271,114 +360,24 @@ function validateRequest(url: string, ip: string, config: Config, origin?: strin
     }
   }
 
-  // 检查恶意URL模式
-  const maliciousPatterns = [
-    /javascript:/i,
-    /data:/i,
-    /vbscript:/i,
-    /file:/i,
-    /ftp:/i,
-    /about:/i,
-    /chrome:/i,
-    /chrome-extension:/i,
-    /moz-extension:/i
-  ];
-
-  if (maliciousPatterns.some(pattern => pattern.test(url))) {
-    return { valid: false, reason: 'Malicious URL pattern' };
-  }
-
-  // 增强URL安全验证 - 检查是否包含控制字符
-  if (/[\u0000-\u001F\u007F-\u009F]/.test(url)) {
-    return { valid: false, reason: 'URL contains control characters' };
-  }
-
-  // 检查是否尝试访问内网地址
-  try {
-    const targetUrl = new URL(fixUrl(url));
-    const hostname = targetUrl.hostname.toLowerCase();
-
-    // 检查私有IP地址范围（IPv4）
-    const privateIPv4Patterns = [
-      /^127\./,           // 127.0.0.0/8 (localhost)
-      /^10\./,            // 10.0.0.0/8
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,  // 172.16.0.0/12
-      /^192\.168\./,      // 192.168.0.0/16
-      /^169\.254\./,      // 169.254.0.0/16 (link-local)
-      /^0\./,             // 0.0.0.0/8
-      /^224\./,           // 224.0.0.0/4 (multicast)
-      /^240\./,           // 240.0.0.0/4 (reserved)
-      /^255\.255\.255\.255$/, // broadcast
-      /^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\./  // 100.64.0.0/10 (carrier-grade NAT)
-    ];
-
-    // 检查IPv6私有地址
-    const privateIPv6Patterns = [
-      /^::1$/,            // IPv6 localhost
-      /^::/,              // IPv6 unspecified
-      /^fe80:/,           // IPv6 link-local
-      /^fc00:/,           // IPv6 unique local
-      /^fd00:/,           // IPv6 unique local
-      /^ff00:/            // IPv6 multicast
-    ];
-
-    // 检查特殊域名和元数据服务
-    const restrictedDomains = [
-      'localhost',
-      'metadata.google.internal',
-      'metadata.goog',
-      '169.254.169.254',  // AWS/GCP metadata service
-      'metadata',
-      'instance-data',
-      'consul',
-      'vault.service.consul'
-    ];
-
-    // 检查是否为IP地址
-    const isIPv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
-    const isIPv6 = hostname.includes(':') && !hostname.includes('.');
-
-    if (isIPv4 && privateIPv4Patterns.some(pattern => pattern.test(hostname))) {
-      return { valid: false, reason: 'Access to private IPv4 addresses is not allowed' };
-    }
-
-    if (isIPv6 && privateIPv6Patterns.some(pattern => pattern.test(hostname))) {
-      return { valid: false, reason: 'Access to private IPv6 addresses is not allowed' };
-    }
-
-    if (restrictedDomains.some(domain => hostname === domain || hostname.endsWith('.' + domain))) {
-      return { valid: false, reason: 'Access to restricted domains is not allowed' };
-    }
-
-    // 检查端口是否为敏感端口
-    const port = targetUrl.port;
-    if (port) {
-      const portNum = parseInt(port);
-      const restrictedPorts = [22, 23, 25, 53, 135, 139, 445, 993, 995, 1433, 1521, 3306, 3389, 5432, 5984, 6379, 9200, 11211, 27017];
-      if (restrictedPorts.includes(portNum)) {
-        return { valid: false, reason: 'Access to restricted ports is not allowed' };
-      }
-    }
-  } catch {
-    // URL解析失败已在前面处理
-  }
-
   return { valid: true };
 }
 
 // ==================== 请求处理模块 ====================
 /**
  * 修复和标准化URL格式
+ * 协议判断限定在字符串开头，避免路径或查询串中偶含":/"时被误改写
  */
 function fixUrl(url: string): string {
-  if (url.includes("://")) {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) {
     return url;
-  } else if (url.includes(':/')) {
-    return url.replace(':/', '://');
-  } else {
-    // 默认使用HTTPS协议，更安全
-    return "https://" + url;
   }
+  // 处理 http:/example.com 这类少写一个斜杠的情况
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/(?!\/)/.test(url)) {
+    return url.replace(':/', '://');
+  }
+  // 默认使用HTTPS协议，更安全
+  return "https://" + url;
 }
 
 /**
@@ -453,75 +452,50 @@ function buildProxyHeaders(originalHeaders: Headers): Record<string, string> {
 }
 
 /**
- * 处理请求body，支持各种content-type
+ * 处理请求body：统一读取为ArrayBuffer
+ * 1. 重试时可以安全复用body（字符串/FormData等无法跨请求重用）
+ * 2. 原样转发，避免JSON.parse/stringify改变原始payload
  */
-async function processRequestBody(request: Request, config: Config): Promise<any> {
+async function processRequestBody(request: Request): Promise<ArrayBuffer | undefined> {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
     return undefined;
   }
 
-  const contentType = request.headers.get('content-type')?.toLowerCase() || '';
-  const contentLength = request.headers.get('content-length');
-
   // 从配置获取最大请求体大小，默认10MB
   const maxBodySize = parseInt(Deno.env.get('MAX_BODY_SIZE') || '10485760'); // 10MB
+  const contentLength = request.headers.get('content-length');
   if (contentLength && parseInt(contentLength) > maxBodySize) {
     throw new Error(`Request body too large. Maximum size: ${maxBodySize} bytes`);
   }
 
   try {
-    if (contentType.includes('application/json')) {
-      // 使用克隆请求防止body被消费后无法再次读取
-      const clonedRequest = request.clone();
-      try {
-        const jsonData = await clonedRequest.json();
-        return JSON.stringify(jsonData);
-      } catch (e) {
-        // JSON解析失败时返回原始文本
-        const text = await request.text();
-        // 检查文本长度
-        if (text.length > maxBodySize) {
-          throw new Error('Request body too large');
-        }
-        return text;
-      }
-    } else if (contentType.includes('application/x-www-form-urlencoded') ||
-               contentType.includes('multipart/form-data')) {
-      return await request.formData();
-    } else if (contentType.includes('text/')) {
-      const text = await request.text();
-      if (text.length > maxBodySize) {
-        throw new Error('Request body too large');
-      }
-      return text;
-    } else {
-      return await request.arrayBuffer();
+    const buffer = await request.arrayBuffer();
+    // content-length可能缺失（如chunked传输），读取后兜底检查实际大小
+    if (buffer.byteLength > maxBodySize) {
+      throw new Error('Request body too large');
     }
+    return buffer;
   } catch (e) {
-    // 增加错误日志
-    console.error("Error processing request body:", e);
-    if (e instanceof Error && e.message === 'Request body too large') {
+    if (e instanceof Error && e.message.includes('Request body too large')) {
       throw e;
     }
-    // 对于其他错误，尝试返回arrayBuffer
-    try {
-      return await request.arrayBuffer();
-    } catch {
-      return undefined;
-    }
+    console.error("Error processing request body:", e);
+    return undefined;
   }
 }
 
 /**
  * 执行代理请求（带智能重试机制）
+ * 重定向手动跟随，并对每一跳重新校验目标地址，防止通过重定向绕过SSRF防护
  */
 async function performProxy(request: Request, targetUrl: string, config: Config): Promise<Response> {
   const headers = buildProxyHeaders(request.headers);
-  const body = await processRequestBody(request, config);
+  const body = await processRequestBody(request);
 
   // 重试配置
   const maxRetries = 3;
   const retryDelay = [100, 300, 1000]; // 递增延迟：100ms, 300ms, 1000ms
+  const maxRedirects = 5;
 
   // 判断是否应该重试的错误类型
   const shouldRetry = (error: any, attempt: number): boolean => {
@@ -546,31 +520,79 @@ async function performProxy(request: Request, targetUrl: string, config: Config)
     return status >= 500 || status === 429 || status === 502 || status === 503 || status === 504;
   };
 
+  // 校验重定向目标：禁止跳转到内网地址、危险协议或黑名单域名
+  const validateRedirectTarget = (location: string, baseUrl: string): string => {
+    const resolved = new URL(location, baseUrl);
+    const check = validateTargetUrl(resolved.toString());
+    if (!check.valid || !check.targetUrl) {
+      throw new Error(`Redirect blocked: ${check.reason}`);
+    }
+    const domain = check.targetUrl.hostname.toLowerCase();
+    const domainBlocked = config.blockedDomains.some(blocked =>
+      domain === blocked || domain.endsWith('.' + blocked)
+    );
+    const domainNotAllowed = config.allowedDomains.length > 0 && !config.allowedDomains.some(allowed =>
+      domain === allowed || domain.endsWith('.' + allowed)
+    );
+    if (domainBlocked || domainNotAllowed) {
+      throw new Error('Redirect target domain is not allowed');
+    }
+    return resolved.toString();
+  };
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), config.timeout);
 
     try {
-      const response = await fetch(targetUrl, {
-        method: request.method,
-        headers,
-        body: attempt === 0 ? body : (body instanceof ArrayBuffer ? body : undefined), // 重试时只对ArrayBuffer重用body
-        signal: controller.signal,
-        redirect: 'follow',
-        // 增加缓存控制
-        cache: request.headers.get('cache-control')?.includes('no-cache') ? 'no-cache' : 'default'
-      });
+      let currentUrl = targetUrl;
+      let method = request.method;
+      let currentBody = body;
+      let redirectCount = 0;
 
-      clearTimeout(timeoutId);
+      while (true) {
+        const response = await fetch(currentUrl, {
+          method,
+          headers,
+          body: currentBody,
+          signal: controller.signal,
+          redirect: 'manual',
+          // 增加缓存控制
+          cache: request.headers.get('cache-control')?.includes('no-cache') ? 'no-cache' : 'default'
+        });
 
-      // 检查是否需要基于状态码重试
-      if (attempt < maxRetries && shouldRetryStatus(response.status)) {
-        console.warn(`Attempt ${attempt + 1} failed with status ${response.status}, retrying...`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay[attempt]));
-        continue;
+        const location = response.headers.get('location');
+        if (response.status >= 300 && response.status < 400 && location) {
+          if (redirectCount >= maxRedirects) {
+            response.body?.cancel();
+            throw new Error('Too many redirects');
+          }
+
+          redirectCount++;
+          response.body?.cancel();
+
+          // 303以及POST遇到301/302时按浏览器语义转为GET并丢弃body
+          if (response.status === 303 ||
+              ((response.status === 301 || response.status === 302) && method === 'POST')) {
+            method = 'GET';
+            currentBody = undefined;
+          }
+
+          currentUrl = validateRedirectTarget(location, currentUrl);
+          continue;
+        }
+
+        // 检查是否需要基于状态码重试
+        if (attempt < maxRetries && shouldRetryStatus(response.status)) {
+          console.warn(`Attempt ${attempt + 1} failed with status ${response.status}, retrying...`);
+          response.body?.cancel();
+          await new Promise(resolve => setTimeout(resolve, retryDelay[attempt]));
+          break;
+        }
+
+        clearTimeout(timeoutId);
+        return response;
       }
-
-      return response;
     } catch (error) {
       clearTimeout(timeoutId);
 
@@ -939,9 +961,14 @@ class CiaoCorsServer {
         return this.handlePreflight(request);
       }
 
-      // 解析目标URL
+      // 解析目标URL（必须带上查询字符串，否则GET参数会全部丢失）
       const url = new URL(request.url);
-      let targetPath = decodeURIComponent(url.pathname.substring(1));
+      let targetPath: string;
+      try {
+        targetPath = decodeURIComponent(url.pathname.substring(1)) + url.search;
+      } catch {
+        return this.createErrorResponse(400, 'Invalid URL encoding');
+      }
 
       // 处理管理API
       if (targetPath.startsWith('_api/')) {
@@ -1002,7 +1029,6 @@ class CiaoCorsServer {
         // 安全验证
         const validation = validateRequest(targetPath, clientIP, this.config, origin || undefined);
         if (!validation.valid) {
-          await this.concurrencyLimiter.release(clientIP);
           return this.createErrorResponse(403, validation.reason || 'Request blocked');
         }
 
@@ -1010,7 +1036,7 @@ class CiaoCorsServer {
         const targetUrl = fixUrl(targetPath);
 
         // 检查GET请求的缓存（包含关键请求头以避免冲突）
-        const cacheKey = this.generateCacheKey(request, targetUrl);
+        const cacheKey = await this.generateCacheKey(request, targetUrl);
         const cachedResponse = request.method === 'GET' ? this.responseCache.get(cacheKey) : undefined;
 
         if (cachedResponse && (Date.now() - cachedResponse.timestamp < this.cacheTTL)) {
@@ -1049,7 +1075,6 @@ class CiaoCorsServer {
           } catch (proxyError) {
             // 处理代理请求错误
             if (proxyError instanceof Error && proxyError.message.includes('Request body too large')) {
-              await this.concurrencyLimiter.release(clientIP);
               return this.createErrorResponse(413, 'Request body too large');
             }
             throw proxyError; // 重新抛出其他错误
@@ -1073,8 +1098,7 @@ class CiaoCorsServer {
       }
 
     } catch (error) {
-      // 确保释放并发限制
-      await this.concurrencyLimiter.release(clientIP);
+      // 并发限制由内层 finally 统一释放，这里不能重复释放（否则计数会漂移）
 
       // 改进错误处理和日志
       this.logger.logError(error as Error, {
@@ -1377,33 +1401,17 @@ class CiaoCorsServer {
   }
 
   // 生成缓存键，包含关键请求头以避免冲突
-  private generateCacheKey(request: Request, targetUrl: string): string {
+  private async generateCacheKey(request: Request, targetUrl: string): Promise<string> {
     const method = request.method;
     const userAgent = request.headers.get('user-agent') || '';
     const accept = request.headers.get('accept') || '';
     const acceptLanguage = request.headers.get('accept-language') || '';
 
-    // 创建更安全的哈希，避免冲突
     const keyData = `${method}:${targetUrl}:${userAgent}:${accept}:${acceptLanguage}`;
 
-    // 使用更安全的哈希算法避免冲突
-    let hash = 0;
-    let hash2 = 0;
-    let hash3 = 0; // 三重哈希进一步减少冲突
-
-    for (let i = 0; i < keyData.length; i++) {
-      const char = keyData.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // 转换为32位整数
-      hash2 = ((hash2 << 3) - hash2) + char;
-      hash2 = hash2 & hash2;
-      hash3 = ((hash3 << 7) - hash3) + char * (i + 1); // 位置相关哈希
-      hash3 = hash3 & hash3;
-    }
-
-    // 使用三重哈希、长度和校验和确保唯一性
-    const checksum = keyData.length + (keyData.charCodeAt(0) || 0) + (keyData.charCodeAt(keyData.length - 1) || 0);
-    return `${method}:${Math.abs(hash).toString(36)}:${Math.abs(hash2).toString(36)}:${Math.abs(hash3).toString(36)}:${checksum.toString(36)}`;
+    // 使用SHA-256避免哈希冲突（自研哈希在用户可控输入下可被碰撞，导致返回错误目标的缓存）
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(keyData));
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
   
   // 重载配置
@@ -1528,32 +1536,17 @@ async function main() {
 
 /**
  * Deno Deploy兼容的默认导出
+ * 使用模块级单例，确保限流、统计、缓存在请求之间共享
+ * （环境变量在Deno Deploy中直接通过Deno.env读取，无需逐请求注入）
  */
+let deployServer: CiaoCorsServer | null = null;
+
 export default {
-  async fetch(request: Request, env: any, ctx: any): Promise<Response> {
-    // 为Deno Deploy环境设置环境变量
-    if (env) {
-      for (const [key, value] of Object.entries(env)) {
-        try {
-          Deno.env.set(key, String(value));
-        } catch {
-          // Deno Deploy可能不支持设置环境变量，忽略错误
-        }
-      }
+  fetch(request: Request): Promise<Response> {
+    if (!deployServer) {
+      deployServer = new CiaoCorsServer();
     }
-
-    const server = new CiaoCorsServer();
-
-    // 如果提供了ctx，注册请求完成后的清理函数
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(async () => {
-        // 延迟一段时间再清理，确保请求处理完毕
-        await new Promise(r => setTimeout(r, 100));
-        server.cleanup();
-      });
-    }
-
-    return server.handleRequest(request);
+    return deployServer.handleRequest(request);
   }
 };
 
