@@ -633,6 +633,8 @@ interface RequestStats {
 class StatsCollector {
   private stats: RequestStats;
   private responseTimes: number[] = [];
+  // 滑动一分钟窗口的时间戳记录，用于精确计算每分钟请求数
+  private recentRequests: number[] = [];
   // 添加存储周期性统计的数组
   private hourlyStats: { timestamp: number; requests: number }[] = [];
   private lastHourRequestCount: number = 0;
@@ -686,6 +688,13 @@ class StatsCollector {
       this.responseTimes.shift();
     }
     this.stats.averageResponseTime = this.responseTimes.reduce((a, b) => a + b, 0) / this.responseTimes.length;
+
+    // 记录当前请求时间戳，用于每分钟请求数统计
+    this.recentRequests.push(Date.now());
+    // 限制长度，防止统计接口长期不被调用时内存无限增长
+    if (this.recentRequests.length > 100000) {
+      this.recentRequests.shift();
+    }
   }
 
   // 记录每小时统计数据
@@ -731,13 +740,14 @@ class StatsCollector {
   } {
     const now = Date.now();
     const oneMinuteAgo = now - 60000;
-    
-    // 计算最近一分钟的请求数
-    const recentHourlyStats = this.hourlyStats.filter(stat => stat.timestamp > oneMinuteAgo);
-    const requestsLastMinute = recentHourlyStats.length > 0 
-      ? this.stats.totalRequests - recentHourlyStats[0].requests 
-      : 0;
-    
+
+    // 计算最近一分钟（滑动窗口）的请求数
+    // 丢弃超过一分钟的旧时间戳，剩余数量即为每分钟请求数
+    while (this.recentRequests.length > 0 && this.recentRequests[0] < oneMinuteAgo) {
+      this.recentRequests.shift();
+    }
+    const requestsLastMinute = this.recentRequests.length;
+
     // 计算错误率
     const errorRate = this.stats.totalRequests > 0 
       ? this.stats.failedRequests / this.stats.totalRequests 
@@ -768,6 +778,7 @@ class StatsCollector {
       startTime: Date.now()
     };
     this.responseTimes = [];
+    this.recentRequests = [];
     // 保留历史统计数据
     // this.hourlyStats = [];
   }
