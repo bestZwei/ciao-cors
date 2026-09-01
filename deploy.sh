@@ -2,12 +2,11 @@
 
 # CIAO-CORS 一键部署和管理脚本
 # 支持安装、配置、监控、更新、卸载等完整功能
-# 版本: 1.3.1
 # 作者: bestZwei
 # 项目: https://github.com/bestZwei/ciao-cors
 
 # ==================== 全局变量 ====================
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 PROJECT_NAME="ciao-cors"
 DEFAULT_PORT=3000
 INSTALL_DIR="/opt/ciao-cors"
@@ -569,7 +568,7 @@ download_project() {
 
         # 增加更严格的安全检查和错误处理
         if timeout 180 curl -fsSL --connect-timeout 30 --max-time 120 --retry 2 --retry-delay 5 \
-           --user-agent "CIAO-CORS-Deploy/1.3.1" --fail --location \
+           --user-agent "CIAO-CORS-Deploy/1.3.2" --fail --location \
            "$GITHUB_REPO/server.ts" -o server.ts.tmp 2>/dev/null; then
             # 验证下载的文件
             if [[ -s server.ts.tmp ]]; then
@@ -2533,23 +2532,25 @@ test_stats_function() {
 
 # 获取当前版本
 get_current_service_version() {
-    if [[ -f "$INSTALL_DIR/server.ts" ]]; then
-        # 尝试从健康检查端点获取版本
-        local port=$(grep "^PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo "$DEFAULT_PORT")
-        local current_version=""
+    local current_version=""
+    local port=$(grep "^PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo "$DEFAULT_PORT")
 
-        # 如果服务正在运行，尝试从API获取版本
-        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-            current_version=$(curl -s --connect-timeout 5 "http://localhost:$port/version" 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
-        fi
-
-        # 如果API获取失败，从 server.ts 的 VERSION 常量中提取
-        if [[ -z "$current_version" ]]; then
-            current_version=$(grep -o "const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'" "$INSTALL_DIR/server.ts" 2>/dev/null | head -1 | sed "s/const VERSION = '//;s/'//")
-        fi
-
-        echo "$current_version"
+    # 1) 优先从运行中的服务 API 获取版本（不依赖文件是否存在）
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        current_version=$(curl -s --connect-timeout 5 "http://localhost:$port/version" 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
     fi
+
+    # 2) 从安装目录的 server.ts 的 VERSION 常量提取
+    if [[ -z "$current_version" ]] && [[ -f "$INSTALL_DIR/server.ts" ]]; then
+        current_version=$(grep -o "const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'" "$INSTALL_DIR/server.ts" 2>/dev/null | head -1 | sed "s/const VERSION = '//;s/'//")
+    fi
+
+    # 3) 开发模式：从脚本所在目录的 server.ts 提取（便于在仓库中直接运行 deploy.sh）
+    if [[ -z "$current_version" ]] && [[ -f "$(dirname "$0")/server.ts" ]]; then
+        current_version=$(grep -o "const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'" "$(dirname "$0")/server.ts" 2>/dev/null | head -1 | sed "s/const VERSION = '//;s/'//")
+    fi
+
+    echo "$current_version"
 }
 
 # 获取远程版本
@@ -2871,8 +2872,8 @@ check_service_update() {
     local remote_version=$(get_remote_service_version)
 
     if [[ -z "$current_version" ]]; then
-        print_status "warning" "未找到已安装的服务 ($INSTALL_DIR/server.ts)，无法检查服务更新"
-        return $EXIT_GENERAL_ERROR
+        print_status "info" "未检测到已安装/运行的服务，跳过服务更新检查（如需更新请先部署服务）"
+        return $EXIT_SUCCESS
     fi
 
     if [[ -z "$remote_version" ]]; then
