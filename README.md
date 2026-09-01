@@ -522,7 +522,7 @@ CIAO-CORS 采用现代化的架构设计，确保高性能和可靠性：
 
 ## 许可证
 
-MIT License - 详见 [LICENSE](LICENSE) 文件
+Anti-Capitalist Software License (v 1.4) - 详见 [LICENSE](LICENSE) 文件
 
 ## 贡献指南
 

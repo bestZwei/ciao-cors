@@ -3,7 +3,7 @@
   "name": "ciao-cors",
   "description": "A powerful CORS proxy server with advanced security features",
   "author": "bestZwei",
-  "license": "MIT",
+  "license": "Anti-Capitalist Software License",
   "compilerOptions": {
     "allowJs": true,
     "lib": ["deno.window"],
