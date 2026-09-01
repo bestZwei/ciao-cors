@@ -25,23 +25,8 @@ print_status() {
 get_current_version() {
     local version=""
 
-    # 首先尝试从 version: '1.3.1' 格式中提取
-    version=$(grep -o "version: '[0-9]\+\.[0-9]\+\.[0-9]\+'" server.ts | head -1 | sed "s/version: '//;s/'//")
-
-    # 如果没找到，尝试从 "version": "1.3.1" 格式中提取
-    if [[ -z "$version" ]]; then
-        version=$(grep -o '"version": "[0-9]\+\.[0-9]\+\.[0-9]\+"' server.ts | head -1 | sed 's/"version": "//;s/"//')
-    fi
-
-    # 如果还没找到，尝试从 v1.3.1 格式中提取
-    if [[ -z "$version" ]]; then
-        version=$(grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' server.ts | head -1 | sed 's/v//')
-    fi
-
-    # 最后尝试任何版本号格式
-    if [[ -z "$version" ]]; then
-        version=$(grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' server.ts | head -1)
-    fi
+    # 从 server.ts 的 VERSION 常量中提取（唯一数据源）
+    version=$(grep -o "const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'" server.ts | head -1 | sed "s/const VERSION = '//;s/'//")
 
     echo "$version"
 }
@@ -72,9 +57,8 @@ update_file_version() {
     # 根据文件类型使用不同的更新策略
     case "$file" in
         "server.ts")
-            # 更新 TypeScript 文件中的版本号
-            sed -i "s/version: '[0-9]\+\.[0-9]\+\.[0-9]\+'/version: '$new_version'/g" "$file"
-            sed -i "s/\"version\": \"[0-9]\+\.[0-9]\+\.[0-9]\+\"/\"version\": \"$new_version\"/g" "$file"
+            # 更新 TypeScript 文件中的 VERSION 常量（单一数据源）
+            sed -i "s/const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'/const VERSION = '$new_version'/g" "$file"
             ;;
         "package.json"|"deno.json")
             # 更新 JSON 文件中的版本号

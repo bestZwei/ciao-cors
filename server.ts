@@ -1,10 +1,14 @@
 /**
  * CIAO-CORS - 高性能CORS代理服务
  * 支持环境变量配置、请求限制、黑白名单、统计等功能
- * 版本: v1.3.1
  * 作者: bestZwei
  * 项目: https://github.com/bestZwei/ciao-cors
  */
+
+// ==================== 版本（单一数据源） ====================
+// 仅在此处定义一次，所有接口/日志中的版本号都引用它，避免多处硬编码导致不一致。
+// 需与 deno.json 中的 "version" 保持一致（由 update-version.sh 统一更新）。
+const VERSION = '1.3.1';
 
 // ==================== 配置管理模块 ====================
 interface Config {
@@ -991,7 +995,7 @@ class CiaoCorsServer {
         return new Response(JSON.stringify({
           status: 'ok',
           timestamp: new Date().toISOString(),
-          version: '1.3.1'
+          version: VERSION
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -1204,7 +1208,7 @@ class CiaoCorsServer {
             size: this.responseCache.size
           },
           uptime: Date.now() - stats.startTime,
-          version: '1.3.1'
+          version: VERSION
         }, null, 2), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -1213,7 +1217,7 @@ class CiaoCorsServer {
         return new Response(JSON.stringify({
           status: 'healthy',
           timestamp: new Date().toISOString(),
-          version: '1.3.1',
+          version: VERSION,
           memory: Deno.memoryUsage ? {
             rss: Deno.memoryUsage().rss,
             heapTotal: Deno.memoryUsage().heapTotal,
@@ -1324,7 +1328,7 @@ class CiaoCorsServer {
 
       case 'version':
         return new Response(JSON.stringify({
-          version: '1.3.1',
+          version: VERSION,
           runtime: `Deno ${Deno.version.deno}`,
           typescript: Deno.version.typescript,
           v8: Deno.version.v8
@@ -1479,7 +1483,7 @@ async function main() {
 
   console.log(`
 ====================================================
-  🚀 CIAO-CORS Server v1.3.1
+  🚀 CIAO-CORS Server v${VERSION}
 ====================================================
   📌 Port: ${config.port}
   📊 Stats: ${config.enableStats ? 'enabled' : 'disabled'}

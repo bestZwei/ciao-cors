@@ -2543,12 +2543,9 @@ get_current_service_version() {
             current_version=$(curl -s --connect-timeout 5 "http://localhost:$port/version" 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
         fi
 
-        # 如果API获取失败，从文件中提取
+        # 如果API获取失败，从 server.ts 的 VERSION 常量中提取
         if [[ -z "$current_version" ]]; then
-            current_version=$(grep -o "version: '[0-9]\+\.[0-9]\+\.[0-9]\+'" "$INSTALL_DIR/server.ts" | head -1 | sed "s/version: '//;s/'//")
-            if [[ -z "$current_version" ]]; then
-                current_version=$(grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' "$INSTALL_DIR/server.ts" | head -1)
-            fi
+            current_version=$(grep -o "const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'" "$INSTALL_DIR/server.ts" 2>/dev/null | head -1 | sed "s/const VERSION = '//;s/'//")
         fi
 
         echo "$current_version"
@@ -2559,7 +2556,7 @@ get_current_service_version() {
 get_remote_service_version() {
     local remote_version=""
     if remote_version=$(timeout 30 curl -s --connect-timeout 10 --max-time 25 --retry 2 \
-        "$GITHUB_REPO/server.ts" 2>/dev/null | grep -o "version: '[0-9]\+\.[0-9]\+\.[0-9]\+'" | head -1 | sed "s/version: '//;s/'//" 2>/dev/null); then
+        "$GITHUB_REPO/server.ts" 2>/dev/null | grep -o "const VERSION = '[0-9]\+\.[0-9]\+\.[0-9]\+'" | head -1 | sed "s/const VERSION = '//;s/'//" 2>/dev/null); then
         echo "$remote_version"
     fi
 }
