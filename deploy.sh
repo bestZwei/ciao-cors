@@ -2,12 +2,12 @@
 
 # CIAO-CORS 一键部署和管理脚本
 # 支持安装、配置、监控、更新、卸载等完整功能
-# 版本: 1.3.0
+# 版本: 1.3.1
 # 作者: bestZwei
 # 项目: https://github.com/bestZwei/ciao-cors
 
 # ==================== 全局变量 ====================
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 PROJECT_NAME="ciao-cors"
 DEFAULT_PORT=3000
 INSTALL_DIR="/opt/ciao-cors"
@@ -569,7 +569,7 @@ download_project() {
 
         # 增加更严格的安全检查和错误处理
         if timeout 180 curl -fsSL --connect-timeout 30 --max-time 120 --retry 2 --retry-delay 5 \
-           --user-agent "CIAO-CORS-Deploy/1.3.0" --fail --location \
+           --user-agent "CIAO-CORS-Deploy/1.3.1" --fail --location \
            "$GITHUB_REPO/server.ts" -o server.ts.tmp 2>/dev/null; then
             # 验证下载的文件
             if [[ -s server.ts.tmp ]]; then

@@ -2,7 +2,7 @@
 
 # CIAO-CORS 完整测试套件
 # 测试所有功能和安全特性
-# 版本: 1.3.0
+# 版本: 1.3.1
 
 # 颜色定义
 RED='\033[0;31m'
@@ -308,7 +308,7 @@ cleanup_test_env() {
 main() {
     clear
     print_separator
-    print_status "info" "CIAO-CORS 完整测试套件 v1.3.0"
+    print_status "info" "CIAO-CORS 完整测试套件 v1.3.1"
     print_separator
     
     # 检查依赖

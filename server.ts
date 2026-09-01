@@ -1,7 +1,7 @@
 /**
  * CIAO-CORS - 高性能CORS代理服务
  * 支持环境变量配置、请求限制、黑白名单、统计等功能
- * 版本: v1.3.0
+ * 版本: v1.3.1
  * 作者: bestZwei
  * 项目: https://github.com/bestZwei/ciao-cors
  */
@@ -991,7 +991,7 @@ class CiaoCorsServer {
         return new Response(JSON.stringify({
           status: 'ok',
           timestamp: new Date().toISOString(),
-          version: '1.3.0'
+          version: '1.3.1'
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -1204,7 +1204,7 @@ class CiaoCorsServer {
             size: this.responseCache.size
           },
           uptime: Date.now() - stats.startTime,
-          version: '1.3.0'
+          version: '1.3.1'
         }, null, 2), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -1213,7 +1213,7 @@ class CiaoCorsServer {
         return new Response(JSON.stringify({
           status: 'healthy',
           timestamp: new Date().toISOString(),
-          version: '1.3.0',
+          version: '1.3.1',
           memory: Deno.memoryUsage ? {
             rss: Deno.memoryUsage().rss,
             heapTotal: Deno.memoryUsage().heapTotal,
@@ -1324,7 +1324,7 @@ class CiaoCorsServer {
 
       case 'version':
         return new Response(JSON.stringify({
-          version: '1.3.0',
+          version: '1.3.1',
           runtime: `Deno ${Deno.version.deno}`,
           typescript: Deno.version.typescript,
           v8: Deno.version.v8
@@ -1479,7 +1479,7 @@ async function main() {
 
   console.log(`
 ====================================================
-  🚀 CIAO-CORS Server v1.3.0
+  🚀 CIAO-CORS Server v1.3.1
 ====================================================
   📌 Port: ${config.port}
   📊 Stats: ${config.enableStats ? 'enabled' : 'disabled'}

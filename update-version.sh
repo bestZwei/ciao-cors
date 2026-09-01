@@ -25,15 +25,15 @@ print_status() {
 get_current_version() {
     local version=""
 
-    # 首先尝试从 version: '1.3.0' 格式中提取
+    # 首先尝试从 version: '1.3.1' 格式中提取
     version=$(grep -o "version: '[0-9]\+\.[0-9]\+\.[0-9]\+'" server.ts | head -1 | sed "s/version: '//;s/'//")
 
-    # 如果没找到，尝试从 "version": "1.3.0" 格式中提取
+    # 如果没找到，尝试从 "version": "1.3.1" 格式中提取
     if [[ -z "$version" ]]; then
         version=$(grep -o '"version": "[0-9]\+\.[0-9]\+\.[0-9]\+"' server.ts | head -1 | sed 's/"version": "//;s/"//')
     fi
 
-    # 如果还没找到，尝试从 v1.3.0 格式中提取
+    # 如果还没找到，尝试从 v1.3.1 格式中提取
     if [[ -z "$version" ]]; then
         version=$(grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' server.ts | head -1 | sed 's/v//')
     fi
