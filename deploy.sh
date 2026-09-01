@@ -2861,6 +2861,42 @@ check_script_update() {
         print_status "warning" "无法检查脚本更新，请检查网络连接或稍后重试"
         print_status "info" "你也可以手动从 https://github.com/bestZwei/ciao-cors 下载最新版本"
     fi
+
+    # 一并检查服务（server.ts）是否有更新
+    check_service_update
+}
+
+# 检查服务更新（仅检测并提示，实际更新交给 update_service）
+check_service_update() {
+    print_status "info" "检查服务更新..."
+
+    local current_version=$(get_current_service_version)
+    local remote_version=$(get_remote_service_version)
+
+    if [[ -z "$current_version" ]]; then
+        print_status "warning" "未找到已安装的服务 ($INSTALL_DIR/server.ts)，无法检查服务更新"
+        return $EXIT_GENERAL_ERROR
+    fi
+
+    if [[ -z "$remote_version" ]]; then
+        print_status "warning" "无法获取远程服务版本，请检查网络连接"
+        return $EXIT_NETWORK_ERROR
+    fi
+
+    print_status "info" "当前服务版本: $current_version"
+    print_status "info" "远程服务版本: $remote_version"
+
+    if [[ "$current_version" != "$remote_version" ]]; then
+        print_status "warning" "发现服务新版本: $remote_version (当前: $current_version)"
+        read -p "是否更新服务? (y/N): " update_svc
+        if [[ "$update_svc" =~ ^[Yy]$ ]]; then
+            update_service
+        else
+            print_status "info" "已跳过服务更新"
+        fi
+    else
+        print_status "success" "服务已是最新版本"
+    fi
 }
 
 # 完全卸载
@@ -3045,7 +3081,7 @@ show_main_menu() {
         echo
 
         print_status "cyan" "🗑️  其他操作"
-        echo " 15) 检查脚本更新"
+        echo " 15) 检查更新（脚本 + 服务）"
         echo " 16) 完全卸载"
         echo "  0) 退出脚本"
         
